@@ -1,10 +1,18 @@
 import { EventEmitter } from "events";
+import { TokenWatcher } from "./TokenWatcher.js";
+import { eventEmitterStore } from "./EventEmitterStore.js";
 
 export class WorkflowExecutor extends EventEmitter {
   constructor(workflow) {
     super();
     this.workflow = workflow;
     this.nodeResults = new Map();
+    this.nodeOutputs = {};
+    // nodeId -> outputsArray // if node is executed once it will
+    // have only 1 output in array if node is a loop it will have array of outputs for all executions
+    // if node is condition it will have target node id on true consition in output
+    this.tokenWatcher = new TokenWatcher("https://1rpc.io/sepolia");
+    this.eventEmitter = eventEmitterStore.getEmitter();
   }
 
   async execute() {
@@ -41,11 +49,27 @@ export class WorkflowExecutor extends EventEmitter {
       // // for (const node of sortedNodes) {
       // //   await this.executeNode(node);
       // // }
+      const currentNode = this.getNode(startNodeId);
 
-      const nodeList = this.getNodeList(startNodeId);
-      console.log("executing node list ", nodeList);
-      for (let i = 0; i < nodeList.length; i++) {
-        await this.executeNode(nodeList[i]);
+      if (currentNode.type === "wallet-erc20-transfers") {
+        // watch erc20 transfers on given wallet address and execute next nodes when event happened
+
+        const walletAddress = "0x8BD0e959E9a7273D465ac74d427Ecc8AAaCa55D8";
+        this.executeTokenWatcherNode(
+          walletAddress,
+          () => {}
+          // this.executeNodes(currentNode.next)
+        );
+      } else {
+        // else execute all nodes
+
+        const nodeList = this.getNodeList(startNodeId);
+        // check if the start node is event then watch it and execute next nodes when event triggers
+
+        console.log("executing node list ", nodeList);
+        for (let i = 0; i < nodeList.length; i++) {
+          await this.executeNode(nodeList[i]);
+        }
       }
     } catch (error) {
       throw error;
@@ -58,10 +82,13 @@ export class WorkflowExecutor extends EventEmitter {
       this.emit("nodeStart", { nodeId: node.id });
 
       // Get input from parent nodes
-      const inputs = this.getNodeInputs(node);
+      const nodeInput =
+        node.prev === -1
+          ? node.data.config.input
+          : this.getNode(node.prev)?.output;
 
       // Execute the node based on its type
-      const result = await this.executeNodeLogic(node, inputs);
+      const result = await this.executeNodeLogic(node, nodeInput);
 
       node.status = "completed";
       node.output = result;
@@ -90,11 +117,11 @@ export class WorkflowExecutor extends EventEmitter {
       case "condition":
         return this.executeConditionNode(node.config, inputs);
       case "action":
-        return this.executeActionNode(node.config, inputs, node.type);
+        return this.executeActionNode(node, inputs, node.type);
       case "swap":
-        return this.executeActionNode(node.config, inputs, node.type);
+        return this.executeActionNode(node, inputs, node.type);
       case "wallet-erc20-transfers":
-        return this.executeActionNode(node.config, inputs, node.type);
+        return this.executeActionNode(node, inputs, node.type);
       case "loop":
         console.log("executing loop ");
         for (let i = 0; i < 3; i++) {
@@ -105,9 +132,9 @@ export class WorkflowExecutor extends EventEmitter {
         return () => {};
 
       case "notification":
-        return this.executeActionNode(node.config, inputs, node.type);
+        return this.executeActionNode(node, inputs, node.type);
       default:
-        return this.executeActionNode(node.config, inputs, "unknown type");
+        return this.executeActionNode(node, inputs, "unknown type");
     }
   }
 
@@ -123,14 +150,17 @@ export class WorkflowExecutor extends EventEmitter {
     return { result: true };
   }
 
-  async executeActionNode(config, inputs, type) {
+  async executeActionNode(node, inputs, type) {
     // Example implementation
 
     console.log(`executing func ${type}`);
     await new Promise((resolve) => setTimeout(resolve, 8000));
-
+    // set output after execution after current node
+    this.nodeOutputs[node.id] = [
+      { message: `this is node output for node ${node.id}` },
+    ];
     // const { action } = config;
-    return { success: true };
+    return { success: true, id: node.id };
   }
 
   getNodeInputs(node) {
@@ -161,6 +191,35 @@ export class WorkflowExecutor extends EventEmitter {
 
     return order;
   }
+
+  getNode(nodeId) {
+    const nodes = new Map(this.workflow.nodes.map((node) => [node.id, node]));
+    return nodes?.get(nodeId);
+  }
+
+  async executeTokenWatcherNode(walletAddress, callbackFunc) {
+    // const { walletAddress } = config;
+
+    console.log("watching for address");
+    // Start watching and return the watcher ID immediately
+    const watcherId = await this.tokenWatcher.watchAddress(
+      walletAddress,
+      (transferData) => {
+        // Emit transfer events through the workflow
+
+        console.log("token transferred", transferData);
+        this.emit("tokenTransfer", {
+          nodeId: config.nodeId,
+          watcherId,
+          data: transferData,
+        });
+      }
+    );
+
+    // Return the watcher ID so it can be used to stop watching later
+    return { watcherId, status: "watching" };
+  }
+
   topologicalSort() {
     const visited = new Set();
     const temp = new Set();
