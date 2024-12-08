@@ -4,6 +4,8 @@ import { executeMoralisErc20WalletTransfersNode } from "./nodes/app/moralis.js";
 import { executeSelectDataNode } from "./nodes/transformation/selectData.js";
 import { executeTelegramNotification } from "./nodes/app/telegram.js";
 import { returnCoinbaseWallet, tradeCoinbase } from "./nodes/web3/coinbase.js";
+import { executeDeployAndMintNFT } from "./nodes/web3/deployAndMintNFT.js";
+import { executeFetchGoogleSheetColumn } from "./nodes/app/googlesheet.js";
 
 export class WorkflowExecutor extends EventEmitter {
   constructor(workflow) {
@@ -71,6 +73,8 @@ export class WorkflowExecutor extends EventEmitter {
       this.emit("nodeStart", { nodeId: node.id });
 
       console.log("executing node ", node.id);
+      // delay 2 seconds
+      await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // Execute the node based on its type
       const [output, nextNodeId] = await this.executeNodeLogic(node, input);
@@ -131,6 +135,12 @@ export class WorkflowExecutor extends EventEmitter {
       }
       case "telegram": {
         return await executeTelegramNotification(this.workflow, node, inputs);
+      }
+      case "googleSheets": {
+        return await executeFetchGoogleSheetColumn(this.workflow, node, inputs);
+      }
+      case "deployNFT": {
+        return await executeDeployAndMintNFT(this.workflow, node, inputs);
       }
       default:
         return this.executeActionNode(node, inputs, "unknown type");
